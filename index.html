@@ -167,7 +167,7 @@
     map.on('load', async () => {
       try {
         // BLM layer
-        blmData = await (await fetch('/data/outputs/approved_land_use_plans.geojson')).json();
+        blmData = await (await fetch('data/outputs/approved_land_use_plans.geojson')).json();
         map.addSource('blm-plans', { type: 'geojson', data: blmData });
         map.addLayer({
           id: 'blm-fill',
@@ -193,7 +193,7 @@
         });
 
         // USFS base layer
-        fsData = await (await fetch('/data/outputs/fs_planning_units.geojson')).json();
+        fsData = await (await fetch('data/outputs/fs_planning_units.geojson')).json();
         map.addSource('fs-units', { type: 'geojson', data: fsData });
         map.addLayer({
           id: 'fs-fill',
@@ -218,7 +218,7 @@
         });
 
         // USFS Forests w/ comment period
-        usfsData = await (await fetch('/data/processed/usfs_merged.geojson')).json();
+        usfsData = await (await fetch('data/processed/usfs_merged.geojson')).json();
         map.addSource('usfs-forests', { type: 'geojson', data: usfsData });
         map.addLayer({
           id: 'usfs-forests-fill',
@@ -261,7 +261,7 @@
     });
 
     async function loadBLMProjectPoints() {
-      const csvUrl = '/data/outputs/blm_projects_with_coords.csv';
+      const csvUrl = 'data/outputs/blm_projects_with_coords.csv';
       const txt = await (await fetch(csvUrl)).text();
       if (!txt.trim()) return status('⚠️ BLM CSV is empty');
 
