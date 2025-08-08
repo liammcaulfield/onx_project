@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Approved Land Use Plans — BLM & USFS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet" />
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .status {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: #fff;
+      border: 1px solid #ccc;
+      padding: 6px 10px;
+      font: 12px system-ui;
+      z-index: 10;
+      max-width: 360px;
+    }
+    .slider-container,
+    .toggle-container {
+      position: absolute;
+      left: 10px;
+      background: #fff;
+      padding: 8px 12px;
+      border: 1px solid #ccc;
+      font: 13px system-ui;
+      z-index: 10;
+    }
+    .slider-container {
+      top: 70px;
+    }
+    .toggle-container {
+      top: 160px;
+    }
+    .slider-container label,
+    .toggle-container label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+    #info-card {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 300px;
+      max-width: 90%;
+      background: #fff;
+      border-right: 2px solid #ccc;
+      overflow-y: auto;
+      padding: 16px;
+      z-index: 20;
+      font-family: system-ui;
+      box-shadow: 2px 0 8px rgba(0,0,0,0.1);
+      transform: translateX(-100%);
+      transition: transform 0.3s ease;
+    }
+    #info-card.open {
+      transform: translateX(0);
+    }
+    #info-card-toggle {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 30;
+      background: #007acc;
+      color: white;
+      padding: 4px 10px;
+      border: none;
+      cursor: pointer;
+    }
+    .info-content {
+      font-size: 14px;
+    }
+    .info-content strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="status">Loading map data…</div>
+  <button id="info-card-toggle">☰</button>
+  <div id="info-card">
+    <div class="info-content" id="popup-content">Click on a feature to see details.</div>
+  </div>
+
+  <div class="slider-container">
+    <label for="daysLeftSlider">Filter by Days Left to Comment:</label>
+    <input type="range" id="daysLeftSlider" min="0" max="100" step="1" value="60">
+    <span id="daysLeftValue">≤ 60 days</span>
+  </div>  
+
+  <div class="toggle-container">
+    <label>Toggle Layers:</label>
+    <input type="checkbox" id="toggle-blm"> BLM Plans<br>
+    <input type="checkbox" id="toggle-usfs"> USFS Plans
+  </div>
+
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script>
+    mapboxgl.accessToken = 'pk.eyJ1IjoibGlhbWNhdWxmaWVsZCIsImEiOiJjbTduaHBid2gwMWF4MmtvaDZwdmFrOXIxIn0.tDgIlzApKEeeIhFdlNsneA';
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/mapbox/light-v11',
+      center: [-105, 40],
+      zoom: 4
+    });
+
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+
+    const status = msg => {
+      document.querySelector('.status').textContent = msg;
+      console.log('[STATUS]', msg);
+    };
+
+    const popupContent = document.getElementById('popup-content');
+    const infoCard = document.getElementById('info-card');
+    const toggleBtn = document.getElementById('info-card-toggle');
+    toggleBtn.onclick = () => infoCard.classList.toggle('open');
+
+    let blmData = null, fsData = null, usfsData = null, blmPoints = null;
+    let maxDaysLeft = 60;
+
+    document.getElementById('daysLeftSlider').addEventListener('input', e => {
+      maxDaysLeft = +e.target.value;
+      document.getElementById('daysLeftValue').textContent = `≤ ${maxDaysLeft} days`;
+      filterLayers();
+    });
+
+    document.getElementById('toggle-blm').addEventListener('change', e => {
+      const visible = e.target.checked ? 'visible' : 'none';
+      map.setLayoutProperty('blm-fill', 'visibility', visible);
+    });
+
+    document.getElementById('toggle-usfs').addEventListener('change', e => {
+      const visible = e.target.checked ? 'visible' : 'none';
+      map.setLayoutProperty('fs-fill', 'visibility', visible);
+    });
+
+    function filterLayers() {
+      if (usfsData) {
+        map.getSource('usfs-forests')?.setData({
+          ...usfsData,
+          features: usfsData.features.filter(f => +f.properties.days_left >= 0 && +f.properties.days_left <= maxDaysLeft)
+        });
+      }
+
+      if (blmPoints) {
+        map.getSource('blm-projects')?.setData({
+          type: 'FeatureCollection',
+          features: blmPoints.filter(f => +f.properties.days_left >= 0 && +f.properties.days_left <= maxDaysLeft)
+        });
+      }
+    }
+
+    function showCardContent(html) {
+      popupContent.innerHTML = html;
+      infoCard.classList.add('open');
+    }
+
+    map.on('load', async () => {
+      try {
+        // BLM layer
+        blmData = await (await fetch('https://www.dropbox.com/scl/fi/rz1qwyocuj36u924m45hh/approved_land_use_plans.geojson?rlkey=78028t82flhvkl3ftrp64srlp&st=qosxfmt4&dl=0')).json();
+        map.addSource('blm-plans', { type: 'geojson', data: blmData });
+        map.addLayer({
+          id: 'blm-fill',
+          type: 'fill',
+          source: 'blm-plans',
+          paint: {
+            'fill-color': '#27ae60',
+            'fill-opacity': 0.4,
+            'fill-outline-color': '#145a32'
+          }
+        });
+        map.setLayoutProperty('blm-fill', 'visibility', 'none');
+        map.on('click', 'blm-fill', e => {
+          const p = e.features[0].properties;
+          showCardContent(`
+            <strong>${p.LUPName || 'Unnamed Plan'}</strong>
+            <br>NEPA #: ${p.NEPAnum || 'N/A'}
+            <br>Type: ${p.MapType || 'N/A'}
+            <br>State: ${p.AdminSt || 'N/A'}
+            <br>Office: ${p.Status || 'N/A'}
+            <br>Decision Date: ${p.RODdate || 'N/A'}
+            <br>${p.ePLink ? `<a href="${p.ePLink}" target="_blank">View Plan</a>` : ''}`);
+        });
+
+        // USFS base layer
+        fsData = await (await fetch('https://www.dropbox.com/scl/fi/9iccbq67xb31h1fyo0t8s/fs_planning_units.geojson?rlkey=922i0cgoekc2n3wp8ioi5x4tg&st=atv0o88l&dl=0')).json();
+        map.addSource('fs-units', { type: 'geojson', data: fsData });
+        map.addLayer({
+          id: 'fs-fill',
+          type: 'fill',
+          source: 'fs-units',
+          paint: {
+            'fill-color': '#1f78b4',
+            'fill-opacity': 0.4,
+            'fill-outline-color': '#0c4a6e'
+          }
+        });
+        map.setLayoutProperty('fs-fill', 'visibility', 'none');
+        map.on('click', 'fs-fill', e => {
+          const p = e.features[0].properties;
+          showCardContent(`
+            <strong>${p.PLANNINGUNIT}</strong>
+            <br>States: ${p.STATES}
+            <br>Unit Type: ${p.PLANNINGUNITTYPE}
+            <br>Latest Revision: ${p.LATESTREVISIONCOMPLETIONYEAR}
+            <br>Rule: ${p.PLANNINGRULESHORT}
+            <br>${p.LINKTOCURRENTPLAN ? `<a href="${p.LINKTOCURRENTPLAN}" target="_blank">View Plan</a>` : ''}`);
+        });
+
+        // USFS Forests w/ comment period
+        usfsData = await (await fetch('/data/processed/usfs_merged.geojson')).json();
+        map.addSource('usfs-forests', { type: 'geojson', data: usfsData });
+        map.addLayer({
+          id: 'usfs-forests-fill',
+          type: 'fill',
+          source: 'usfs-forests',
+          paint: {
+            'fill-color': '#ff7f00',
+            'fill-opacity': 0.4,
+            'fill-outline-color': '#b34700'
+          }
+        });
+        map.on('click', 'usfs-forests-fill', e => {
+          const p = e.features[0].properties;
+          const daysText = p.days_left == null ? '—'
+            : p.days_left < 0 ? `closed (${p.comments_close_on})`
+            : `${p.days_left} (closes ${p.comments_close_on})`;
+          showCardContent(`
+            <strong>${p.FORESTNAME_clean || p.FORESTNAME || 'Unnamed Forest'}</strong>
+            <br>Type: ${p.type || '—'}
+            <br>Title: ${p.title || '—'}
+            <br>Closes: ${daysText}
+            <br>${p.html_url ? `<a href="${p.html_url}" target="_blank">Federal Register</a>` : ''}`);
+        });
+
+        await loadBLMProjectPoints();
+        filterLayers();
+
+        const bounds = new mapboxgl.LngLatBounds();
+        blmData.features.forEach(f => {
+          if (f.geometry?.type === 'Polygon') f.geometry.coordinates[0].forEach(c => bounds.extend(c));
+          if (f.geometry?.type === 'MultiPolygon') f.geometry.coordinates.forEach(p => p[0].forEach(c => bounds.extend(c)));
+        });
+        if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 40 });
+
+        status('✅ Map fully loaded.');
+      } catch (err) {
+        console.error(err);
+        status('❌ ' + err.message);
+      }
+    });
+
+    async function loadBLMProjectPoints() {
+      const csvUrl = '/data/outputs/blm_projects_with_coords.csv';
+      const txt = await (await fetch(csvUrl)).text();
+      if (!txt.trim()) return status('⚠️ BLM CSV is empty');
+
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const rows = Papa.parse(txt, { header: true, skipEmptyLines: true }).data.map(obj => {
+        const o = {}; Object.keys(obj).forEach(k => o[k.trim().toLowerCase()] = obj[k]); return o;
+      });
+
+      blmPoints = rows.map(r => {
+        const lat = parseFloat((r.latitude || '').trim());
+        const lon = parseFloat((r.longitude || '').trim());
+        const closeStr = (r['days left'] || '').trim();
+        let closureDateISO = '', daysLeft = '';
+
+        if (closeStr) {
+          const parts = closeStr.split('/');
+          if (parts.length === 3) {
+            let [m, d, y] = parts.map(s => s.padStart(2, '0'));
+            if (y.length === 2) y = (y > '50' ? '19' : '20') + y;
+            const iso = `${y}-${m}-${d}`;
+            const closeDate = new Date(iso);
+            if (!isNaN(closeDate)) {
+              closureDateISO = iso;
+              daysLeft = Math.round((closeDate - today) / 86400000);
+            }
+          }
+        }
+
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          return {
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [lon, lat] },
+            properties: { ...r, closure_date: closureDateISO, days_left: daysLeft }
+          };
+        }
+        return null;
+      }).filter(Boolean);
+
+      map.addSource('blm-projects', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: blmPoints }
+      });
+
+      map.addLayer({
+        id: 'blm-proj-circ',
+        type: 'circle',
+        source: 'blm-projects',
+        paint: {
+          'circle-radius': 6,
+          'circle-color': '#005bb5',
+          'circle-stroke-color': 'white',
+          'circle-stroke-width': 1.3
+        }
+      });
+
+      map.on('click', 'blm-proj-circ', e => {
+        const p = e.features[0].properties;
+
+        const daysText =
+          p.days_left === '' || p.days_left === null || p.days_left === undefined
+            ? '—'
+            : p.days_left < 0
+              ? `closed (${p.closure_date})`
+              : `${p.days_left} (closes ${p.closure_date})`;
+
+        const urlLink = p.url
+          ? `<a href="${p.url}" target="_blank">Comment Here</a>`
+          : '—';
+
+        showCardContent(`
+          <strong>${p["project name"] || 'Unknown Project'}</strong>
+          <br>NEPA #: ${p["nepa #"] || '—'}
+          <br>Lead Office: ${p["lead office"] || '—'}
+          <br>Program: ${p.program || '—'}
+          <br>Status: ${p["nepa status"] || '—'}
+          <br>Days left: ${daysText}
+          <br>Comment Here: ${urlLink}
+        `);
+      });
+
+      map.on('mouseenter', 'blm-proj-circ', () => map.getCanvas().style.cursor = 'pointer');
+      map.on('mouseleave', 'blm-proj-circ', () => map.getCanvas().style.cursor = '');
+      status(`✅ Loaded ${blmPoints.length} BLM project points.`);
+    }
+  </script>
+</body>
+</html>
